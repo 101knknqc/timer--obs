@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/sounds">
+        <file alias="alert.wav">../data/alert.wav</file>
+    </qresource>
+</RCC>
