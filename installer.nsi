@@ -4,7 +4,7 @@
 
 !define PLUGIN_NAME     "Confidence Monitor"
 !ifndef PLUGIN_VERSION
-  !define PLUGIN_VERSION  "1.1.0"
+  !define PLUGIN_VERSION  "1.0.0"
 !endif
 !define PLUGIN_AUTHOR   "Confidence Monitor"
 !define PLUGIN_DLL      "confidence-monitor.dll"
@@ -23,10 +23,10 @@ InstallDirRegKey HKCU "${UNINSTALL_KEY}" "InstallLocation"
 !define MUI_ABORTWARNING
 
 !define MUI_WELCOMEPAGE_TITLE   "Confidence Monitor ${PLUGIN_VERSION}"
-!define MUI_WELCOMEPAGE_TEXT    "This wizard will install the Confidence Monitor plugin for OBS Studio.$\r$\n$\r$\nA native timer dock in OBS - black background, automatic colors, built-in sound alerts.$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TEXT    "This wizard will install the Confidence Monitor plugin for OBS Studio. Click Next to continue."
 
 !define MUI_FINISHPAGE_TITLE    "Installation complete!"
-!define MUI_FINISHPAGE_TEXT     "Confidence Monitor is installed.$\r$\n$\r$\nRestart OBS Studio, then go to:$\r$\n  View > Docks > Confidence Monitor$\r$\n$\r$\nEnjoy your stream!"
+!define MUI_FINISHPAGE_TEXT     "Confidence Monitor is installed. Restart OBS Studio, then go to: View > Docks > Confidence Monitor"
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Launch OBS Studio"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchOBS
@@ -53,21 +53,6 @@ VIAddVersionKey /LANG=1036 "FileVersion"     "${PLUGIN_VERSION}"
 VIAddVersionKey /LANG=1036 "LegalCopyright"  "MIT License"
 
 RequestExecutionLevel user
-
-Function .onInit
-    IfFileExists "$PROGRAMFILES64\obs-studio\bin\64bit\obs64.exe" obs_found
-    IfFileExists "$PROGRAMFILES\obs-studio\bin\64bit\obs64.exe" obs_found
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION "OBS Studio was not detected on this PC.$\r$\nContinue anyway?" IDYES obs_found
-    Abort
-    obs_found:
-    FindWindow $0 "Qt5QWindowIcon" "OBS 3"
-    FindWindow $1 "Qt6QWindowIcon" "OBS 3"
-    ${If} $0 != 0
-    ${OrIf} $1 != 0
-        MessageBox MB_OK|MB_ICONWARNING "OBS Studio is currently running.$\r$\nClose OBS before continuing."
-        Abort
-    ${EndIf}
-FunctionEnd
 
 Section "Main plugin" SecMain
     SectionIn RO
@@ -119,7 +104,4 @@ Section "Uninstall"
     DeleteRegKey HKCU "${UNINSTALL_KEY}"
     Delete "$SMPROGRAMS\${PLUGIN_NAME}\Uninstall.lnk"
     RMDir  "$SMPROGRAMS\${PLUGIN_NAME}"
-    MessageBox MB_YESNO "Also delete your saved timer settings?" IDNO skip_settings
-        DeleteRegKey HKCU "Software\ConfidenceMonitor"
-    skip_settings:
 SectionEnd
