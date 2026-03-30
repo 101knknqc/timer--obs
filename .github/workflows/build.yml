@@ -28,54 +28,68 @@ jobs:
           modules: qtmultimedia
           cache: true
 
-      # ── 3. Download OBS Studio 32.1.0 (zip portable) ──────────
-      - name: Download OBS Studio
-        shell: pwsh
-        run: |
-          $OBS_VERSION = "32.1.0"
-          $url = "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/OBS-Studio-$OBS_VERSION-Windows-x64.zip"
-          Write-Host "Downloading OBS $OBS_VERSION from: $url"
-          Invoke-WebRequest $url -OutFile obs-studio.zip -UseBasicParsing
-          Expand-Archive obs-studio.zip -DestinationPath obs-studio-pkg
-          Write-Host "=== Top-level contents ==="
-          Get-ChildItem obs-studio-pkg | Select-Object Name
-
-      # ── 4. Clone OBS source for headers ───────────────────────
-      - name: Clone OBS source (headers only)
+      # ── 3. Clone OBS source (headers + CMake exports) ─────────
+      # We clone OBS source and build ONLY libobs + obs-frontend-api
+      # to get the headers and .lib import files needed to link against.
+      - name: Clone OBS source
         shell: pwsh
         run: |
           git clone --depth 1 --branch 32.1.0 `
             https://github.com/obsproject/obs-studio.git obs-source
-          Write-Host "Headers available at obs-source/"
+          Write-Host "OBS source cloned."
 
-      # ── 5. Find .lib files ────────────────────────────────────
+      # ── 4. Download OBS prebuilt deps (zlib, mbedtls, etc.) ───
+      # OBS CMake downloads these automatically via FetchContent
+      # We just need cmake to configure successfully to get the .lib files
+      - name: Configure OBS (headers + libs only)
+        shell: pwsh
+        run: |
+          # We configure OBS with minimal options to get libobs.lib and obs-frontend-api.lib
+          # DISABLE everything except libobs core and frontend API
+          cmake -B obs-build -S obs-source `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DENABLE_PLUGINS=OFF `
+            -DENABLE_UI=OFF `
+            -DENABLE_SCRIPTING=OFF `
+            -DENABLE_BROWSER=OFF `
+            -DENABLE_VST=OFF `
+            -DENABLE_VLC=OFF `
+            -DENABLE_WEBSOCKET=OFF `
+            -DENABLE_PIPEWIRE=OFF `
+            -DOBS_MULTIARCH_SUFFIX="" `
+            -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6"
+          Write-Host "OBS configured."
+
+      - name: Build libobs and obs-frontend-api
+        shell: pwsh
+        run: |
+          cmake --build obs-build --config Release `
+            --target libobs obs-frontend-api `
+            -- /m /p:CL_MPCount=4
+          Write-Host "OBS libs built."
+
+      # ── 5. Locate the .lib files ──────────────────────────────
       - name: Locate OBS import libs
         shell: pwsh
         run: |
-          Write-Host "=== Searching for .lib files ==="
-          $libs = Get-ChildItem -Recurse obs-studio-pkg -Filter "*.lib"
-          $libs | Select-Object FullName
+          $obsLib = Get-ChildItem -Recurse obs-build -Filter "libobs.lib" | Select-Object -First 1
+          $feLib  = Get-ChildItem -Recurse obs-build -Filter "obs-frontend-api.lib" | Select-Object -First 1
 
-          $obsLib = $libs | Where-Object { $_.Name -eq "obs.lib" }    | Select-Object -First 1
-          $feLib  = $libs | Where-Object { $_.Name -eq "obs-frontend-api.lib" } | Select-Object -First 1
-
-          if (-not $obsLib) {
-            Write-Host "obs.lib not found — listing ALL files in package:"
-            Get-ChildItem -Recurse obs-studio-pkg | Select-Object FullName
-            throw "obs.lib not found in OBS package!"
-          }
-          if (-not $feLib) {
-            throw "obs-frontend-api.lib not found in OBS package!"
-          }
-
-          Write-Host "obs.lib      → $($obsLib.FullName)"
+          Write-Host "libobs.lib   → $($obsLib.FullName)"
           Write-Host "frontend.lib → $($feLib.FullName)"
+
+          if (-not $obsLib -or -not $feLib) {
+            Write-Host "=== All .lib in obs-build ==="
+            Get-ChildItem -Recurse obs-build -Filter "*.lib" | Select-Object FullName
+            throw "OBS .lib files not found after build!"
+          }
 
           echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"   >> $env:GITHUB_ENV
           echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)" >> $env:GITHUB_ENV
 
-      # ── 6. Configure CMake ────────────────────────────────────
-      - name: Configure CMake
+      # ── 6. Configure plugin ───────────────────────────────────
+      - name: Configure plugin CMake
         shell: pwsh
         run: |
           cmake -B build -G "Visual Studio 17 2022" -A x64 `
@@ -85,55 +99,39 @@ jobs:
             -DOBS_LIB_DIR="${{ env.OBS_LIB_DIR }}" `
             -DOBS_FE_LIB_DIR="${{ env.OBS_FE_LIB_DIR }}"
 
-      # ── 7. Build ──────────────────────────────────────────────
-      - name: Build
+      # ── 7. Build plugin ───────────────────────────────────────
+      - name: Build plugin
         run: cmake --build build --config Release
 
-      # ── 8. Stage files ────────────────────────────────────────
-      - name: Stage files
+      # ── 8. Package as zip (no NSIS needed) ───────────────────
+      - name: Package plugin
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path staging/bin/64bit
-          New-Item -ItemType Directory -Force -Path staging/data/locale
+          $out = "confidence-monitor-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$out/bin/64bit"
+          New-Item -ItemType Directory -Force -Path "$out/data/locale"
 
-          Copy-Item build/Release/confidence-monitor.dll staging/bin/64bit/
-          Copy-Item data/locale/en-US.ini                staging/data/locale/
-          Copy-Item data/alert.wav                        staging/data/
-          Copy-Item LICENSE.txt                           staging/
+          Copy-Item build/Release/confidence-monitor.dll "$out/bin/64bit/"
+          Copy-Item data/locale/en-US.ini                "$out/data/locale/"
+          Copy-Item data/alert.wav                        "$out/data/"
 
-          # Remove icon lines from NSIS (no icon.ico in repo)
-          $nsi = Get-Content installer.nsi
-          $nsi = $nsi -replace '!define MUI_ICON.*',                    ''
-          $nsi = $nsi -replace '!define MUI_UNICON.*',                  ''
-          $nsi = $nsi -replace '!define MUI_HEADERIMAGE_BITMAP.*',      ''
-          $nsi = $nsi -replace '!define MUI_WELCOMEFINISHPAGE_BITMAP.*',''
-          $nsi | Set-Content staging/installer.nsi
+          Compress-Archive -Path $out -DestinationPath "$out.zip"
+          Write-Host "Packaged: $out.zip"
 
-      # ── 9. Build installer ────────────────────────────────────
-      - name: Install NSIS
-        run: choco install nsis --yes --no-progress
-
-      - name: Build installer
-        shell: pwsh
-        working-directory: staging
-        run: |
-          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
-          Move-Item confidence-monitor-setup.exe ../
-
-      # ── 10. Upload artifact ───────────────────────────────────
-      - name: Upload installer
+      # ── 9. Upload artifact ────────────────────────────────────
+      - name: Upload plugin zip
         uses: actions/upload-artifact@v4
         with:
-          name: confidence-monitor-setup
-          path: confidence-monitor-setup.exe
+          name: confidence-monitor-windows-x64
+          path: confidence-monitor-windows-x64.zip
           retention-days: 30
 
-      # ── 11. GitHub Release (sur tag v*) ───────────────────────
+      # ── 10. GitHub Release (sur tag v*) ───────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: confidence-monitor-setup.exe
+          files: confidence-monitor-windows-x64.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
