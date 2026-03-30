@@ -73,16 +73,27 @@ jobs:
       - name: Locate OBS import libs
         shell: pwsh
         run: |
-          $obsLib = Get-ChildItem -Recurse obs-build -Filter "libobs.lib" | Select-Object -First 1
-          $feLib  = Get-ChildItem -Recurse obs-build -Filter "obs-frontend-api.lib" | Select-Object -First 1
+          # Always dump all .lib files so we can debug if needed
+          Write-Host "=== All .lib files in obs-build ==="
+          Get-ChildItem -Recurse obs-build -Filter "*.lib" | Select-Object FullName
 
-          Write-Host "libobs.lib   → $($obsLib.FullName)"
+          # libobs target outputs as obs.lib — find it inside the libobs subfolder
+          $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" |
+                    Where-Object { $_.FullName -match "libobs" } |
+                    Select-Object -First 1
+
+          # Fallback: any obs.lib if not found in libobs subfolder
+          if (-not $obsLib) {
+            $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" | Select-Object -First 1
+          }
+
+          $feLib = Get-ChildItem -Recurse obs-build -Filter "obs-frontend-api.lib" | Select-Object -First 1
+
+          Write-Host "obs.lib      → $($obsLib.FullName)"
           Write-Host "frontend.lib → $($feLib.FullName)"
 
           if (-not $obsLib -or -not $feLib) {
-            Write-Host "=== All .lib in obs-build ==="
-            Get-ChildItem -Recurse obs-build -Filter "*.lib" | Select-Object FullName
-            throw "OBS .lib files not found after build!"
+            throw "OBS .lib files not found after build! See file list above."
           }
 
           echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"   >> $env:GITHUB_ENV
