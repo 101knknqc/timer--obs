@@ -4,7 +4,7 @@
 
 !define PLUGIN_NAME     "Confidence Monitor"
 !ifndef PLUGIN_VERSION
-  !define PLUGIN_VERSION  "1.0.0"
+  !define PLUGIN_VERSION  "1.1.0"
 !endif
 !define PLUGIN_AUTHOR   "Confidence Monitor"
 !define PLUGIN_DLL      "confidence-monitor.dll"
