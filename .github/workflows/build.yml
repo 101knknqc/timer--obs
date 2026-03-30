@@ -99,6 +99,22 @@ jobs:
           echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"   >> $env:GITHUB_ENV
           echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)" >> $env:GITHUB_ENV
 
+
+      # ── 5b. Find obsconfig.h location ─────────────────────────
+      - name: Locate obsconfig.h
+        shell: pwsh
+        run: |
+          Write-Host "=== Finding obsconfig.h ==="
+          $cfg = Get-ChildItem -Recurse obs-build -Filter "obsconfig.h" | Select-Object -First 1
+          if ($cfg) {
+            Write-Host "obsconfig.h → $($cfg.FullName)"
+            echo "OBS_CONFIG_DIR=$($cfg.DirectoryName)" >> $env:GITHUB_ENV
+          } else {
+            Write-Host "obsconfig.h NOT FOUND — listing obs-build top dirs:"
+            Get-ChildItem obs-build | Select-Object Name
+            throw "obsconfig.h not found!"
+          }
+
       # ── 6. Configure plugin ───────────────────────────────────
       - name: Configure plugin CMake
         shell: pwsh
@@ -107,6 +123,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6" `
             -DOBS_SOURCE_DIR="${{ github.workspace }}/obs-source" `
+            -DOBS_CONFIG_DIR="${{ env.OBS_CONFIG_DIR }}" `
             -DOBS_LIB_DIR="${{ env.OBS_LIB_DIR }}" `
             -DOBS_FE_LIB_DIR="${{ env.OBS_FE_LIB_DIR }}"
 
