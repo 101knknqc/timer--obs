@@ -7,7 +7,11 @@
 ; ═══════════════════════════════════════════════════════════════
 
 !define PLUGIN_NAME     "Confidence Monitor"
-!define PLUGIN_VERSION  "1.0.0"
+; PLUGIN_VERSION peut être passé via /D depuis la ligne de commande (CI/CD).
+; Si non défini (build local), on utilise la valeur par défaut.
+!ifndef PLUGIN_VERSION
+  !define PLUGIN_VERSION  "1.0.0"
+!endif
 !define PLUGIN_AUTHOR   "Confidence Monitor"
 !define PLUGIN_DLL      "confidence-monitor.dll"
 !define PLUGIN_DIR      "confidence-monitor"
