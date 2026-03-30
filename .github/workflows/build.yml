@@ -1,144 +1,150 @@
 name: Build & Package — Confidence Monitor
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-    branches: [main]
+push:
+branches: [main]
+tags: ['v*']
+pull_request:
+branches: [main]
 
 jobs:
-  build-windows:
-    name: Build Windows x64
-    runs-on: windows-2022
+build-windows:
+name: Build Windows x64
+runs-on: windows-2022
 
-    steps:
-      # ── 1. Checkout ────────────────────────────────────────────
-      - name: Checkout
-        uses: actions/checkout@v4
+```
+steps:
+  # ── 1. Checkout ────────────────────────────────────────────
+  - name: Checkout
+    uses: actions/checkout@v4
 
-      # ── 2. Qt6 ────────────────────────────────────────────────
-      - name: Install Qt6
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.6.3'
-          host: windows
-          target: desktop
-          arch: win64_msvc2019_64
-          modules: qtmultimedia
-          cache: true
+  # ── 2. Install Qt ─────────────────────────────────────────
+  - name: Install Qt6
+    uses: jurplel/install-qt-action@v3
+    with:
+      version: '6.6.3'
+      host: windows
+      target: desktop
+      arch: win64_msvc2019_64
+      modules: qtmultimedia
+      cache: true
 
-      # ── 3. Clone OBS source ───────────────────────────────────
-      - name: Clone OBS source
-        shell: pwsh
-        run: |
-          git clone --depth 1 --branch 32.1.0 `
-            https://github.com/obsproject/obs-studio.git obs-source
-          Write-Host "OBS source cloned."
+  # ── 3. Clone OBS source ───────────────────────────────────
+  - name: Clone OBS source
+    shell: pwsh
+    run: |
+      git clone --depth 1 --branch 32.1.0 https://github.com/obsproject/obs-studio.git obs-source
+      Write-Host "OBS source cloned."
 
-      # ── 4. Configure OBS (libobs + frontend-api only) ─────────
-      - name: Configure OBS
-        shell: pwsh
-        run: |
-          cmake -B obs-build -S obs-source `
-            -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DENABLE_PLUGINS=OFF `
-            -DENABLE_UI=OFF `
-            -DENABLE_SCRIPTING=OFF `
-            -DENABLE_BROWSER=OFF `
-            -DENABLE_VST=OFF `
-            -DENABLE_VLC=OFF `
-            -DENABLE_WEBSOCKET=OFF `
-            -DENABLE_PIPEWIRE=OFF `
-            -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6"
+  # ── 4. Configure OBS (libobs + frontend-api only) ─────────
+  - name: Configure OBS
+    shell: pwsh
+    run: |
+      cmake -B obs-build -S obs-source `
+        -G "Visual Studio 17 2022" -A x64 `
+        -DCMAKE_BUILD_TYPE=Release `
+        -DENABLE_PLUGINS=OFF `
+        -DENABLE_UI=OFF `
+        -DENABLE_SCRIPTING=OFF `
+        -DENABLE_BROWSER=OFF `
+        -DENABLE_VST=OFF `
+        -DENABLE_VLC=OFF `
+        -DENABLE_WEBSOCKET=OFF `
+        -DENABLE_PIPEWIRE=OFF `
+        -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6"
 
-      # ── 5. Build OBS libs ─────────────────────────────────────
-      - name: Build libobs and obs-frontend-api
-        shell: pwsh
-        run: |
-          cmake --build obs-build --config Release `
-            --target libobs obs-frontend-api `
-            -- /m /p:CL_MPCount=4
+  # ── 5. Build OBS libs ─────────────────────────────────────
+  - name: Build libobs and obs-frontend-api
+    shell: pwsh
+    run: |
+      cmake --build obs-build --config Release `
+        --target libobs obs-frontend-api `
+        -- /m
 
-      # ── 6. Find all paths needed ──────────────────────────────
-      - name: Locate OBS headers and libs
-        shell: pwsh
-        run: |
-          # ---- .lib files ----
-          $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" |
-                    Where-Object { $_.FullName -match "libobs" } |
-                    Select-Object -First 1
-          if (-not $obsLib) {
-            $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" | Select-Object -First 1
-          }
-          $feLib = Get-ChildItem -Recurse obs-build -Filter "obs-frontend-api.lib" | Select-Object -First 1
+  # ── 6. Locate OBS headers and libs ────────────────────────
+  - name: Locate OBS headers and libs
+    shell: pwsh
+    run: |
 
-          # ---- generated obsconfig.h ----
-          $cfgH = Get-ChildItem -Recurse obs-build -Filter "obsconfig.h" | Select-Object -First 1
+      Write-Host "Searching OBS libraries..."
 
-          # ---- obs-frontend-api.h header ----
-          # In OBS 32 it moved from UI/obs-frontend-api/ to frontend/api/
-          $feH = Get-ChildItem -Recurse obs-source -Filter "obs-frontend-api.h" | Select-Object -First 1
+      $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" |
+                Where-Object { $_.FullName -match "libobs" } |
+                Select-Object -First 1
 
-          Write-Host "obs.lib              → $($obsLib.FullName)"
-          Write-Host "obs-frontend-api.lib → $($feLib.FullName)"
-          Write-Host "obsconfig.h          → $($cfgH.FullName)"
-          Write-Host "obs-frontend-api.h   → $($feH.FullName)"
+      if (-not $obsLib) {
+        $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" | Select-Object -First 1
+      }
 
-          if (-not $obsLib)  { Get-ChildItem -Recurse obs-build -Filter "*.lib" | Select-Object FullName; throw "obs.lib not found!" }
-          if (-not $feLib)   { throw "obs-frontend-api.lib not found!" }
-          if (-not $cfgH)    { throw "obsconfig.h not found!" }
-          if (-not $feH)     { throw "obs-frontend-api.h not found in source!" }
+      $feLib = Get-ChildItem -Recurse obs-build -Filter "obs-frontend-api.lib" | Select-Object -First 1
 
-          echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"    >> $env:GITHUB_ENV
-          echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)"  >> $env:GITHUB_ENV
-          echo "OBS_CONFIG_DIR=$($cfgH.DirectoryName)"   >> $env:GITHUB_ENV
-          echo "OBS_FE_INCLUDE=$($feH.DirectoryName)"    >> $env:GITHUB_ENV
+      Write-Host "Searching headers..."
 
-      # ── 7. Configure plugin ───────────────────────────────────
-      - name: Configure plugin
-        shell: pwsh
-        run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6" `
-            -DOBS_SOURCE_DIR="${{ github.workspace }}/obs-source" `
-            -DOBS_CONFIG_DIR="${{ env.OBS_CONFIG_DIR }}" `
-            -DOBS_FE_INCLUDE="${{ env.OBS_FE_INCLUDE }}" `
-            -DOBS_LIB_DIR="${{ env.OBS_LIB_DIR }}" `
-            -DOBS_FE_LIB_DIR="${{ env.OBS_FE_LIB_DIR }}"
+      $cfgH = Get-ChildItem -Recurse obs-build -Filter "obsconfig.h" | Select-Object -First 1
+      $feH  = Get-ChildItem -Recurse obs-source -Filter "obs-frontend-api.h" | Select-Object -First 1
 
-      # ── 8. Build plugin ───────────────────────────────────────
-      - name: Build plugin
-        run: cmake --build build --config Release
+      Write-Host "obs.lib              → $($obsLib.FullName)"
+      Write-Host "obs-frontend-api.lib → $($feLib.FullName)"
+      Write-Host "obsconfig.h          → $($cfgH.FullName)"
+      Write-Host "obs-frontend-api.h   → $($feH.FullName)"
 
-      # ── 9. Package ────────────────────────────────────────────
-      - name: Package plugin
-        shell: pwsh
-        run: |
-          $out = "confidence-monitor-windows-x64"
-          New-Item -ItemType Directory -Force -Path "$out/bin/64bit"
-          New-Item -ItemType Directory -Force -Path "$out/data/locale"
-          Copy-Item build/Release/confidence-monitor.dll "$out/bin/64bit/"
-          Copy-Item data/locale/en-US.ini                "$out/data/locale/"
-          Copy-Item data/alert.wav                        "$out/data/"
-          Compress-Archive -Path $out -DestinationPath "$out.zip"
+      if (-not $obsLib) { throw "obs.lib not found!" }
+      if (-not $feLib)  { throw "obs-frontend-api.lib not found!" }
+      if (-not $cfgH)   { throw "obsconfig.h not found!" }
+      if (-not $feH)    { throw "obs-frontend-api.h not found!" }
 
-      # ── 10. Upload ────────────────────────────────────────────
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: confidence-monitor-windows-x64
-          path: confidence-monitor-windows-x64.zip
-          retention-days: 30
+      echo "OBS_LIB_DIR=$($obsLib.DirectoryName)" >> $env:GITHUB_ENV
+      echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)" >> $env:GITHUB_ENV
+      echo "OBS_CONFIG_DIR=$($cfgH.DirectoryName)" >> $env:GITHUB_ENV
+      echo "OBS_FE_INCLUDE=$($feH.DirectoryName)" >> $env:GITHUB_ENV
 
-      # ── 11. GitHub Release (sur tag v*) ───────────────────────
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: confidence-monitor-windows-x64.zip
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # ── 7. Configure plugin ───────────────────────────────────
+  - name: Configure plugin
+    shell: pwsh
+    run: |
+      cmake -B build -G "Visual Studio 17 2022" -A x64 `
+        -DCMAKE_BUILD_TYPE=Release `
+        -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6" `
+        -DOBS_SOURCE_DIR="${{ github.workspace }}/obs-source" `
+        -DOBS_CONFIG_DIR="${{ env.OBS_CONFIG_DIR }}" `
+        -DOBS_FE_INCLUDE="${{ env.OBS_FE_INCLUDE }}" `
+        -DOBS_LIB_DIR="${{ env.OBS_LIB_DIR }}" `
+        -DOBS_FE_LIB_DIR="${{ env.OBS_FE_LIB_DIR }}"
+
+  # ── 8. Build plugin ───────────────────────────────────────
+  - name: Build plugin
+    run: cmake --build build --config Release
+
+  # ── 9. Package plugin ─────────────────────────────────────
+  - name: Package plugin
+    shell: pwsh
+    run: |
+      $out = "confidence-monitor-windows-x64"
+
+      New-Item -ItemType Directory -Force -Path "$out/bin/64bit"
+      New-Item -ItemType Directory -Force -Path "$out/data/locale"
+
+      Copy-Item build/Release/confidence-monitor.dll "$out/bin/64bit/"
+      Copy-Item data/locale/en-US.ini "$out/data/locale/"
+      Copy-Item data/alert.wav "$out/data/"
+
+      Compress-Archive -Path $out -DestinationPath "$out.zip"
+
+  # ── 10. Upload artifact ───────────────────────────────────
+  - name: Upload artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: confidence-monitor-windows-x64
+      path: confidence-monitor-windows-x64.zip
+      retention-days: 30
+
+  # ── 11. GitHub Release (tag v*) ───────────────────────────
+  - name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: softprops/action-gh-release@v2
+    with:
+      files: confidence-monitor-windows-x64.zip
+      generate_release_notes: true
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
