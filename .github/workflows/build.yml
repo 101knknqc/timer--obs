@@ -3,7 +3,7 @@ name: Build & Package — Confidence Monitor
 on:
   push:
     branches: [main]
-    tags:     ['v*']
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -13,104 +13,121 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    # ── Checkout ─────────────────────────────────────────────
-    - name: Checkout
-      uses: actions/checkout@v4
+      # ── 1. Checkout ────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    # ── Qt6 ──────────────────────────────────────────────────
-    - name: Install Qt6
-      uses: jurplel/install-qt-action@v3
-      with:
-        version:   '6.6.0'
-        host:      'windows'
-        target:    'desktop'
-        arch:      'win64_msvc2019_64'
-        modules:   'qtmultimedia'
+      # ── 2. Qt6 ────────────────────────────────────────────────
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          modules: qtmultimedia
+          cache: true
 
-    # ── OBS headers + import libs ─────────────────────────────
-    - name: Download OBS Studio deps
-      shell: pwsh
-      run: |
-        $OBS_VERSION = "30.1.2"
-        $url = "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/obs-studio-$OBS_VERSION-deps-windows-x64.zip"
-        Invoke-WebRequest $url -OutFile obs-deps.zip
-        Expand-Archive obs-deps.zip -DestinationPath obs-deps
+      # ── 3. Download OBS Studio release package ─────────────────
+      - name: Download OBS Studio
+        shell: pwsh
+        run: |
+          $OBS_VERSION = "31.0.3"
+          $url = "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/obs-studio-$OBS_VERSION-windows-x64.zip"
+          Write-Host "Downloading OBS $OBS_VERSION..."
+          Invoke-WebRequest $url -OutFile obs-studio.zip -UseBasicParsing
+          Expand-Archive obs-studio.zip -DestinationPath obs-studio-pkg
+          Write-Host "=== Package root ==="
+          Get-ChildItem obs-studio-pkg | Select-Object Name
 
-    - name: Download OBS headers
-      shell: pwsh
-      run: |
-        $OBS_VERSION = "30.1.2"
-        # Clone just the headers we need
-        git clone --depth 1 --branch $OBS_VERSION `
-          https://github.com/obsproject/obs-studio.git obs-source
-      continue-on-error: false
+      # ── 4. Clone OBS source for headers only ──────────────────
+      - name: Clone OBS headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 31.0.3 `
+            https://github.com/obsproject/obs-studio.git obs-source
+          Write-Host "Headers cloned."
 
-    # ── CMake configure ───────────────────────────────────────
-    - name: Configure CMake
-      shell: pwsh
-      run: |
-        cmake -B build -G "Visual Studio 17 2022" -A x64 `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DQt6_DIR="$env:Qt6_DIR/lib/cmake/Qt6" `
-          -DOBS_SOURCE_DIR="${{ github.workspace }}/obs-source"
+      # ── 5. Find .lib files in the release package ─────────────
+      - name: Locate OBS libs
+        shell: pwsh
+        id: obs-libs
+        run: |
+          $obsLib = Get-ChildItem -Recurse obs-studio-pkg -Filter "obs.lib" | Select-Object -First 1
+          $feLib  = Get-ChildItem -Recurse obs-studio-pkg -Filter "obs-frontend-api.lib" | Select-Object -First 1
 
-    # ── Build ─────────────────────────────────────────────────
-    - name: Build
-      run: cmake --build build --config Release
+          Write-Host "obs.lib      → $($obsLib.FullName)"
+          Write-Host "frontend.lib → $($feLib.FullName)"
 
-    # ── Préparer le dossier de staging pour NSIS ─────────────
-    - name: Stage files
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path staging/build/Release
-        New-Item -ItemType Directory -Force -Path staging/data/locale
-        New-Item -ItemType Directory -Force -Path staging/assets
+          if (-not $obsLib -or -not $feLib) {
+            Write-Host "=== All .lib files found ==="
+            Get-ChildItem -Recurse obs-studio-pkg -Filter "*.lib" | Select-Object FullName
+            throw "Could not find required .lib files!"
+          }
 
-        Copy-Item build/Release/confidence-monitor.dll staging/build/Release/
-        Copy-Item data/locale/en-US.ini                staging/data/locale/
-        Copy-Item data/alert.wav                        staging/data/
-        Copy-Item installer.nsi                         staging/
-        Copy-Item LICENSE.txt                           staging/
+          echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"    >> $env:GITHUB_ENV
+          echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)"  >> $env:GITHUB_ENV
 
-        # Icône placeholder si absente
-        if (-not (Test-Path assets/icon.ico)) {
-          # Copier une icône OBS par défaut si disponible, sinon skip
-          $mui_no_icon = '/define MUI_ICON'
-          # Patch le .nsi pour désactiver l'icône custom si absente
-          (Get-Content staging/installer.nsi) `
-            -replace '!define MUI_ICON.*',   '' `
-            -replace '!define MUI_UNICON.*', '' `
-            -replace '!define MUI_HEADERIMAGE$', '' `
-            -replace '!define MUI_HEADERIMAGE_BITMAP.*', '' `
-            -replace '!define MUI_WELCOMEFINISHPAGE_BITMAP.*', '' |
-            Set-Content staging/installer.nsi
-        }
+      # ── 6. Configure CMake ────────────────────────────────────
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6" `
+            -DOBS_SOURCE_DIR="${{ github.workspace }}/obs-source" `
+            -DOBS_LIB_DIR="${{ env.OBS_LIB_DIR }}" `
+            -DOBS_FE_LIB_DIR="${{ env.OBS_FE_LIB_DIR }}"
 
-    # ── NSIS → .exe ───────────────────────────────────────────
-    - name: Install NSIS
-      run: choco install nsis --yes
+      # ── 7. Build ──────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config Release
 
-    - name: Build installer
-      shell: pwsh
-      working-directory: staging
-      run: |
-        & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
-        Move-Item confidence-monitor-setup.exe ../
+      # ── 8. Stage files ────────────────────────────────────────
+      - name: Stage files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging/bin/64bit
+          New-Item -ItemType Directory -Force -Path staging/data/locale
 
-    # ── Upload artifact ───────────────────────────────────────
-    - name: Upload installer
-      uses: actions/upload-artifact@v4
-      with:
-        name: confidence-monitor-setup
-        path: confidence-monitor-setup.exe
-        retention-days: 30
+          Copy-Item build/Release/confidence-monitor.dll staging/bin/64bit/
+          Copy-Item data/locale/en-US.ini                staging/data/locale/
+          Copy-Item data/alert.wav                        staging/data/
+          Copy-Item LICENSE.txt                           staging/
 
-    # ── Release (sur tag v*) ──────────────────────────────────
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: confidence-monitor-setup.exe
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Patch installer.nsi — remove icon lines absentes
+          $nsi = Get-Content installer.nsi
+          $nsi = $nsi -replace '!define MUI_ICON.*',                    ''
+          $nsi = $nsi -replace '!define MUI_UNICON.*',                  ''
+          $nsi = $nsi -replace '!define MUI_HEADERIMAGE_BITMAP.*',      ''
+          $nsi = $nsi -replace '!define MUI_WELCOMEFINISHPAGE_BITMAP.*',''
+          $nsi | Set-Content staging/installer.nsi
+
+      # ── 9. NSIS ───────────────────────────────────────────────
+      - name: Install NSIS
+        run: choco install nsis --yes --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: staging
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+          Move-Item confidence-monitor-setup.exe ../
+
+      # ── 10. Upload ────────────────────────────────────────────
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: confidence-monitor-setup
+          path: confidence-monitor-setup.exe
+          retention-days: 30
+
+      # ── 11. GitHub Release (sur tag v*) ───────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: confidence-monitor-setup.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

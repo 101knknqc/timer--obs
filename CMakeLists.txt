@@ -8,28 +8,42 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Multimedia)
 qt_standard_project_setup()
 
-# ── OBS SDK path — adjust if needed ──────────────────────────
-# Set OBS_SOURCE_DIR to your OBS source checkout, OR
-# set OBS_INCLUDE_DIR / OBS_LIB_DIR if you have a pre-built SDK.
-#
-# Example with obs-studio source:
-#   cmake -DOBS_SOURCE_DIR="C:/obs-studio" ..
-#
+# ── OBS paths ─────────────────────────────────────────────────
+# Usage options:
+#   A) OBS_SOURCE_DIR  = path to obs-studio source clone (headers + separate lib dirs)
+#      + OBS_LIB_DIR   = dir containing obs.lib
+#      + OBS_FE_LIB_DIR= dir containing obs-frontend-api.lib
+#   B) OBS_INSTALL_DIR = path to installed OBS (C:/Program Files/obs-studio)
+
 if(DEFINED OBS_SOURCE_DIR)
-    set(OBS_INCLUDE_DIR "${OBS_SOURCE_DIR}/libobs")
-    set(OBS_FRONTEND_INCLUDE "${OBS_SOURCE_DIR}/UI/obs-frontend-api")
-    find_library(OBS_LIB     obs      PATHS "${OBS_SOURCE_DIR}/build/libobs" REQUIRED)
-    find_library(OBS_FE_LIB  obs-frontend-api
-                 PATHS "${OBS_SOURCE_DIR}/build/UI/obs-frontend-api" REQUIRED)
+    set(OBS_INCLUDE_DIR     "${OBS_SOURCE_DIR}/libobs")
+    set(OBS_FE_INCLUDE_DIR  "${OBS_SOURCE_DIR}/UI/obs-frontend-api")
 else()
-    # Pre-built SDK layout (obs-studio installed to C:/Program Files/obs-studio)
     set(OBS_INSTALL_DIR "C:/Program Files/obs-studio" CACHE PATH "OBS install dir")
+    set(OBS_SOURCE_DIR      "${OBS_INSTALL_DIR}")
     set(OBS_INCLUDE_DIR     "${OBS_INSTALL_DIR}/include")
-    set(OBS_FRONTEND_INCLUDE "${OBS_INSTALL_DIR}/include")
-    find_library(OBS_LIB     obs      PATHS "${OBS_INSTALL_DIR}/bin/64bit" REQUIRED)
-    find_library(OBS_FE_LIB  obs-frontend-api
-                 PATHS "${OBS_INSTALL_DIR}/bin/64bit" REQUIRED)
+    set(OBS_FE_INCLUDE_DIR  "${OBS_INSTALL_DIR}/include")
+    set(OBS_LIB_DIR         "${OBS_INSTALL_DIR}/bin/64bit")
+    set(OBS_FE_LIB_DIR      "${OBS_INSTALL_DIR}/bin/64bit")
 endif()
+
+# Search dirs for .lib files
+if(NOT DEFINED OBS_LIB_DIR)
+    set(OBS_LIB_DIR    "${OBS_SOURCE_DIR}/build/libobs")
+endif()
+if(NOT DEFINED OBS_FE_LIB_DIR)
+    set(OBS_FE_LIB_DIR "${OBS_SOURCE_DIR}/build/UI/obs-frontend-api")
+endif()
+
+find_library(OBS_LIB    NAMES obs libobs
+    PATHS "${OBS_LIB_DIR}"    NO_DEFAULT_PATH REQUIRED)
+find_library(OBS_FE_LIB NAMES obs-frontend-api
+    PATHS "${OBS_FE_LIB_DIR}" NO_DEFAULT_PATH REQUIRED)
+
+message(STATUS "OBS include  : ${OBS_INCLUDE_DIR}")
+message(STATUS "OBS FE include: ${OBS_FE_INCLUDE_DIR}")
+message(STATUS "OBS lib      : ${OBS_LIB}")
+message(STATUS "OBS FE lib   : ${OBS_FE_LIB}")
 
 # ── Sources ───────────────────────────────────────────────────
 set(SOURCES
@@ -37,21 +51,15 @@ set(SOURCES
     src/confidence-monitor.cpp
     src/confidence-monitor-dock.cpp
 )
-
-set(HEADERS
-    src/confidence-monitor.hpp
-)
-
-set(RESOURCES
-    src/resources.qrc
-)
+set(HEADERS  src/confidence-monitor.hpp)
+set(RESOURCES src/resources.qrc)
 
 # ── Target ───────────────────────────────────────────────────
 add_library(confidence-monitor MODULE ${SOURCES} ${HEADERS} ${RESOURCES})
 
 target_include_directories(confidence-monitor PRIVATE
     ${OBS_INCLUDE_DIR}
-    ${OBS_FRONTEND_INCLUDE}
+    ${OBS_FE_INCLUDE_DIR}
     src
 )
 
@@ -63,7 +71,6 @@ target_link_libraries(confidence-monitor PRIVATE
     ${OBS_FE_LIB}
 )
 
-# ── Output name matches OBS convention ───────────────────────
 set_target_properties(confidence-monitor PROPERTIES
     PREFIX ""
     OUTPUT_NAME "confidence-monitor"
