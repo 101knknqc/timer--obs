@@ -28,9 +28,7 @@ jobs:
           modules: qtmultimedia
           cache: true
 
-      # ── 3. Clone OBS source (headers + CMake exports) ─────────
-      # We clone OBS source and build ONLY libobs + obs-frontend-api
-      # to get the headers and .lib import files needed to link against.
+      # ── 3. Clone OBS source ───────────────────────────────────
       - name: Clone OBS source
         shell: pwsh
         run: |
@@ -38,14 +36,10 @@ jobs:
             https://github.com/obsproject/obs-studio.git obs-source
           Write-Host "OBS source cloned."
 
-      # ── 4. Download OBS prebuilt deps (zlib, mbedtls, etc.) ───
-      # OBS CMake downloads these automatically via FetchContent
-      # We just need cmake to configure successfully to get the .lib files
-      - name: Configure OBS (headers + libs only)
+      # ── 4. Configure OBS (libobs + frontend-api only) ─────────
+      - name: Configure OBS
         shell: pwsh
         run: |
-          # We configure OBS with minimal options to get libobs.lib and obs-frontend-api.lib
-          # DISABLE everything except libobs core and frontend API
           cmake -B obs-build -S obs-source `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
@@ -57,66 +51,53 @@ jobs:
             -DENABLE_VLC=OFF `
             -DENABLE_WEBSOCKET=OFF `
             -DENABLE_PIPEWIRE=OFF `
-            -DOBS_MULTIARCH_SUFFIX="" `
             -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6"
-          Write-Host "OBS configured."
 
+      # ── 5. Build OBS libs ─────────────────────────────────────
       - name: Build libobs and obs-frontend-api
         shell: pwsh
         run: |
           cmake --build obs-build --config Release `
             --target libobs obs-frontend-api `
             -- /m /p:CL_MPCount=4
-          Write-Host "OBS libs built."
 
-      # ── 5. Locate the .lib files ──────────────────────────────
-      - name: Locate OBS import libs
+      # ── 6. Find all paths needed ──────────────────────────────
+      - name: Locate OBS headers and libs
         shell: pwsh
         run: |
-          # Always dump all .lib files so we can debug if needed
-          Write-Host "=== All .lib files in obs-build ==="
-          Get-ChildItem -Recurse obs-build -Filter "*.lib" | Select-Object FullName
-
-          # libobs target outputs as obs.lib — find it inside the libobs subfolder
+          # ---- .lib files ----
           $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" |
                     Where-Object { $_.FullName -match "libobs" } |
                     Select-Object -First 1
-
-          # Fallback: any obs.lib if not found in libobs subfolder
           if (-not $obsLib) {
             $obsLib = Get-ChildItem -Recurse obs-build -Filter "obs.lib" | Select-Object -First 1
           }
-
           $feLib = Get-ChildItem -Recurse obs-build -Filter "obs-frontend-api.lib" | Select-Object -First 1
 
-          Write-Host "obs.lib      → $($obsLib.FullName)"
-          Write-Host "frontend.lib → $($feLib.FullName)"
+          # ---- generated obsconfig.h ----
+          $cfgH = Get-ChildItem -Recurse obs-build -Filter "obsconfig.h" | Select-Object -First 1
 
-          if (-not $obsLib -or -not $feLib) {
-            throw "OBS .lib files not found after build! See file list above."
-          }
+          # ---- obs-frontend-api.h header ----
+          # In OBS 32 it moved from UI/obs-frontend-api/ to frontend/api/
+          $feH = Get-ChildItem -Recurse obs-source -Filter "obs-frontend-api.h" | Select-Object -First 1
 
-          echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"   >> $env:GITHUB_ENV
-          echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)" >> $env:GITHUB_ENV
+          Write-Host "obs.lib              → $($obsLib.FullName)"
+          Write-Host "obs-frontend-api.lib → $($feLib.FullName)"
+          Write-Host "obsconfig.h          → $($cfgH.FullName)"
+          Write-Host "obs-frontend-api.h   → $($feH.FullName)"
 
+          if (-not $obsLib)  { Get-ChildItem -Recurse obs-build -Filter "*.lib" | Select-Object FullName; throw "obs.lib not found!" }
+          if (-not $feLib)   { throw "obs-frontend-api.lib not found!" }
+          if (-not $cfgH)    { throw "obsconfig.h not found!" }
+          if (-not $feH)     { throw "obs-frontend-api.h not found in source!" }
 
-      # ── 5b. Find obsconfig.h location ─────────────────────────
-      - name: Locate obsconfig.h
-        shell: pwsh
-        run: |
-          Write-Host "=== Finding obsconfig.h ==="
-          $cfg = Get-ChildItem -Recurse obs-build -Filter "obsconfig.h" | Select-Object -First 1
-          if ($cfg) {
-            Write-Host "obsconfig.h → $($cfg.FullName)"
-            echo "OBS_CONFIG_DIR=$($cfg.DirectoryName)" >> $env:GITHUB_ENV
-          } else {
-            Write-Host "obsconfig.h NOT FOUND — listing obs-build top dirs:"
-            Get-ChildItem obs-build | Select-Object Name
-            throw "obsconfig.h not found!"
-          }
+          echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"    >> $env:GITHUB_ENV
+          echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)"  >> $env:GITHUB_ENV
+          echo "OBS_CONFIG_DIR=$($cfgH.DirectoryName)"   >> $env:GITHUB_ENV
+          echo "OBS_FE_INCLUDE=$($feH.DirectoryName)"    >> $env:GITHUB_ENV
 
-      # ── 6. Configure plugin ───────────────────────────────────
-      - name: Configure plugin CMake
+      # ── 7. Configure plugin ───────────────────────────────────
+      - name: Configure plugin
         shell: pwsh
         run: |
           cmake -B build -G "Visual Studio 17 2022" -A x64 `
@@ -124,37 +105,35 @@ jobs:
             -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6" `
             -DOBS_SOURCE_DIR="${{ github.workspace }}/obs-source" `
             -DOBS_CONFIG_DIR="${{ env.OBS_CONFIG_DIR }}" `
+            -DOBS_FE_INCLUDE="${{ env.OBS_FE_INCLUDE }}" `
             -DOBS_LIB_DIR="${{ env.OBS_LIB_DIR }}" `
             -DOBS_FE_LIB_DIR="${{ env.OBS_FE_LIB_DIR }}"
 
-      # ── 7. Build plugin ───────────────────────────────────────
+      # ── 8. Build plugin ───────────────────────────────────────
       - name: Build plugin
         run: cmake --build build --config Release
 
-      # ── 8. Package as zip (no NSIS needed) ───────────────────
+      # ── 9. Package ────────────────────────────────────────────
       - name: Package plugin
         shell: pwsh
         run: |
           $out = "confidence-monitor-windows-x64"
           New-Item -ItemType Directory -Force -Path "$out/bin/64bit"
           New-Item -ItemType Directory -Force -Path "$out/data/locale"
-
           Copy-Item build/Release/confidence-monitor.dll "$out/bin/64bit/"
           Copy-Item data/locale/en-US.ini                "$out/data/locale/"
           Copy-Item data/alert.wav                        "$out/data/"
-
           Compress-Archive -Path $out -DestinationPath "$out.zip"
-          Write-Host "Packaged: $out.zip"
 
-      # ── 9. Upload artifact ────────────────────────────────────
-      - name: Upload plugin zip
+      # ── 10. Upload ────────────────────────────────────────────
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: confidence-monitor-windows-x64
           path: confidence-monitor-windows-x64.zip
           retention-days: 30
 
-      # ── 10. GitHub Release (sur tag v*) ───────────────────────
+      # ── 11. GitHub Release (sur tag v*) ───────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
