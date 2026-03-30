@@ -8,6 +8,7 @@
 #include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QStandardPaths>
 
 // ═══════════════════════════════════════════════════════════════
 //  ConfidenceMonitorDock — constructor
@@ -104,24 +105,32 @@ ConfidenceMonitorDock::~ConfidenceMonitorDock()
 
 void ConfidenceMonitorDock::Register()
 {
-	const auto cb = []() {
-		auto *mainWin = static_cast<QMainWindow *>(
-			obs_frontend_get_main_window());
-		auto *dock = new ConfidenceMonitorDock(mainWin);
-		mainWin->addDockWidget(Qt::RightDockWidgetArea, dock);
-
-		auto *action = static_cast<QAction *>(
-			obs_frontend_add_dock(dock));
-		if (action)
-			action->setChecked(true);
-	};
-
+	// Use a static lambda stored as a plain function pointer via obs event callback.
+	// OBS 28+ deprecated obs_frontend_add_dock in favour of obs_frontend_add_dock_by_id.
 	obs_frontend_add_event_callback(
-		[](obs_frontend_event event, void *data) {
-			if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING)
-				reinterpret_cast<void(*)()>(data)();
+		[](obs_frontend_event event, void *) {
+			if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING)
+				return;
+
+			auto *mainWin = static_cast<QMainWindow *>(
+				obs_frontend_get_main_window());
+			auto *dock = new ConfidenceMonitorDock(mainWin);
+
+#if LIBOBS_API_MAJOR_VER >= 30
+			// OBS 30+: use the new ID-based dock API
+			obs_frontend_add_dock_by_id(
+				"confidence-monitor-dock",
+				"Confidence Monitor",
+				dock);
+#else
+			// OBS 28-29: legacy dock API
+			auto *action = static_cast<QAction *>(
+				obs_frontend_add_dock(dock));
+			if (action)
+				action->setChecked(true);
+#endif
 		},
-		reinterpret_cast<void *>(+cb));
+		nullptr);
 }
 
 // ═══════════════════════════════════════════════════════════════
