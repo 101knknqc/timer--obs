@@ -28,45 +28,51 @@ jobs:
           modules: qtmultimedia
           cache: true
 
-      # ── 3. Download OBS Studio release package ─────────────────
+      # ── 3. Download OBS Studio 32.1.0 (zip portable) ──────────
       - name: Download OBS Studio
         shell: pwsh
         run: |
-          $OBS_VERSION = "31.0.3"
-          $url = "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/obs-studio-$OBS_VERSION-windows-x64.zip"
-          Write-Host "Downloading OBS $OBS_VERSION..."
+          $OBS_VERSION = "32.1.0"
+          $url = "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/OBS-Studio-$OBS_VERSION-Windows-x64.zip"
+          Write-Host "Downloading OBS $OBS_VERSION from: $url"
           Invoke-WebRequest $url -OutFile obs-studio.zip -UseBasicParsing
           Expand-Archive obs-studio.zip -DestinationPath obs-studio-pkg
-          Write-Host "=== Package root ==="
+          Write-Host "=== Top-level contents ==="
           Get-ChildItem obs-studio-pkg | Select-Object Name
 
-      # ── 4. Clone OBS source for headers only ──────────────────
-      - name: Clone OBS headers
+      # ── 4. Clone OBS source for headers ───────────────────────
+      - name: Clone OBS source (headers only)
         shell: pwsh
         run: |
-          git clone --depth 1 --branch 31.0.3 `
+          git clone --depth 1 --branch 32.1.0 `
             https://github.com/obsproject/obs-studio.git obs-source
-          Write-Host "Headers cloned."
+          Write-Host "Headers available at obs-source/"
 
-      # ── 5. Find .lib files in the release package ─────────────
-      - name: Locate OBS libs
+      # ── 5. Find .lib files ────────────────────────────────────
+      - name: Locate OBS import libs
         shell: pwsh
-        id: obs-libs
         run: |
-          $obsLib = Get-ChildItem -Recurse obs-studio-pkg -Filter "obs.lib" | Select-Object -First 1
-          $feLib  = Get-ChildItem -Recurse obs-studio-pkg -Filter "obs-frontend-api.lib" | Select-Object -First 1
+          Write-Host "=== Searching for .lib files ==="
+          $libs = Get-ChildItem -Recurse obs-studio-pkg -Filter "*.lib"
+          $libs | Select-Object FullName
+
+          $obsLib = $libs | Where-Object { $_.Name -eq "obs.lib" }    | Select-Object -First 1
+          $feLib  = $libs | Where-Object { $_.Name -eq "obs-frontend-api.lib" } | Select-Object -First 1
+
+          if (-not $obsLib) {
+            Write-Host "obs.lib not found — listing ALL files in package:"
+            Get-ChildItem -Recurse obs-studio-pkg | Select-Object FullName
+            throw "obs.lib not found in OBS package!"
+          }
+          if (-not $feLib) {
+            throw "obs-frontend-api.lib not found in OBS package!"
+          }
 
           Write-Host "obs.lib      → $($obsLib.FullName)"
           Write-Host "frontend.lib → $($feLib.FullName)"
 
-          if (-not $obsLib -or -not $feLib) {
-            Write-Host "=== All .lib files found ==="
-            Get-ChildItem -Recurse obs-studio-pkg -Filter "*.lib" | Select-Object FullName
-            throw "Could not find required .lib files!"
-          }
-
-          echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"    >> $env:GITHUB_ENV
-          echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)"  >> $env:GITHUB_ENV
+          echo "OBS_LIB_DIR=$($obsLib.DirectoryName)"   >> $env:GITHUB_ENV
+          echo "OBS_FE_LIB_DIR=$($feLib.DirectoryName)" >> $env:GITHUB_ENV
 
       # ── 6. Configure CMake ────────────────────────────────────
       - name: Configure CMake
@@ -95,7 +101,7 @@ jobs:
           Copy-Item data/alert.wav                        staging/data/
           Copy-Item LICENSE.txt                           staging/
 
-          # Patch installer.nsi — remove icon lines absentes
+          # Remove icon lines from NSIS (no icon.ico in repo)
           $nsi = Get-Content installer.nsi
           $nsi = $nsi -replace '!define MUI_ICON.*',                    ''
           $nsi = $nsi -replace '!define MUI_UNICON.*',                  ''
@@ -103,7 +109,7 @@ jobs:
           $nsi = $nsi -replace '!define MUI_WELCOMEFINISHPAGE_BITMAP.*',''
           $nsi | Set-Content staging/installer.nsi
 
-      # ── 9. NSIS ───────────────────────────────────────────────
+      # ── 9. Build installer ────────────────────────────────────
       - name: Install NSIS
         run: choco install nsis --yes --no-progress
 
@@ -114,7 +120,7 @@ jobs:
           & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
           Move-Item confidence-monitor-setup.exe ../
 
-      # ── 10. Upload ────────────────────────────────────────────
+      # ── 10. Upload artifact ───────────────────────────────────
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
